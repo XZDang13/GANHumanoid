@@ -22,7 +22,7 @@ from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpW
 from RLAlg.buffer.replay_buffer import ReplayBuffer, compute_gae
 from RLAlg.nn.steps import StochasticContinuousPolicyStep, ValueStep
 from RLAlg.alg.ppo import PPO
-from RLAlg.alg.discriminator_alg import DiscriminatorAlg
+from RLAlg.alg.gan import GAN
 
 from model import Actor, Critic, Discriminator
 
@@ -91,7 +91,7 @@ class Trainer:
     @torch.no_grad()
     def get_discriminator_reward(self, motion_obs_batch: torch.Tensor) -> torch.Tensor:
         disc_step:ValueStep = self.discriminator(motion_obs_batch)
-        rewards = -torch.log(torch.sigmoid(disc_step.value) + 1e-8)
+        rewards = -torch.log(1 - 1 / (1 + torch.exp(-disc_step.value)) + 1e-5)
         return rewards
     
     def rollout(self):
@@ -106,7 +106,7 @@ class Trainer:
 
             motion_obs = info["amp_obs"]
             disc_reward = self.get_discriminator_reward(motion_obs)
-
+            
             reward = disc_reward * 1.0 + task_reward * 0.0
             
             done = terminate | timeout
@@ -145,6 +145,9 @@ class Trainer:
         self.critic.train()
 
     def update(self):
+        policy_loss_buffer = []
+        value_loss_buffer = []
+        discriminator_loss_buffer = []
         for _ in range(10):
             for batch in self.rollout_buffer.sample_batchs(self.batch_keys, 4096):
                 obs_batch = batch["observations"].to(self.device)
@@ -171,12 +174,13 @@ class Trainer:
                 value_loss = PPO.compute_clipped_value_loss(self.critic, obs_batch, value_batch,
                                                             return_batch, 0.2)
                 
-                discriminator_loss = DiscriminatorAlg.compute_bce_loss(self.discriminator, reference_motion_obs_batch,
-                                                                       motion_obs_batch, label_smoothing=0.2,
-                                                                       r1_gamma=5.0)
+                discriminator_loss = GAN.compute_bce_loss(self.discriminator, reference_motion_obs_batch,
+                                                            motion_obs_batch,
+                                                            label_smoothing=0.2,
+                                                            r1_gamma=5.0)
 
 
-                loss = policy_loss + value_loss * 0.5 - entropy * 0.01 + discriminator_loss
+                loss = policy_loss + value_loss * 0.5 - entropy * 0.01 + discriminator_loss * 5.0
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -185,11 +189,19 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
                 self.optimizer.step()
 
+                policy_loss_buffer.append(policy_loss.item())
+                value_loss_buffer.append(value_loss.item())
+                discriminator_loss_buffer.append(discriminator_loss.item())
+
+        print(f"Policy Loss: {np.mean(policy_loss_buffer):.4f}, "
+              f"Value Loss: {np.mean(value_loss_buffer):.4f}, "
+              f"Discriminator Loss: {np.mean(discriminator_loss_buffer):.4f}")
+
 
     def train(self):
         obs, info = self.env.reset()
         self.obs = obs
-        for epoch in trange(500):
+        for epoch in trange(250):
             self.rollout()
             self.update()
 
