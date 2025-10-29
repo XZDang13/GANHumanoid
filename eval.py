@@ -42,7 +42,7 @@ class Evaluator:
         self.actor = Actor(obs_dim, action_dim).to(self.device)
         self.discriminator = Discriminator(motion_dim).to(self.device)
 
-        discriminator_weight, actor_weights, _ = torch.load("model_1000.pth")
+        discriminator_weight, actor_weights, _ = torch.load("weight.pth")
         self.actor.load_state_dict(actor_weights)
         self.discriminator.load_state_dict(discriminator_weight)
         self.actor.eval()

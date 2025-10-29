@@ -46,8 +46,14 @@ class Trainer:
         self.discriminator = Discriminator(motion_dim).to(self.device)
 
         params = list(self.actor.parameters()) + list(self.critic.parameters())
-        self.ac_optimizer = torch.optim.Adam(params, lr=3e-4)
-        self.d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=5e-5, weight_decay=1e-3)
+        self.ac_optimizer = torch.optim.Adam(params, lr=5e-5)
+        self.d_optimizer = torch.optim.Adam(
+            [
+                {'params': self.discriminator.encoder.parameters(), "weight_decay":1e-4},
+                {'params': self.discriminator.head.parameters(), "weight_decay":1e-2},
+            ],
+            lr=5e-5, betas=(0.5, 0.999)
+        )
 
         self.steps = 25
 
@@ -111,13 +117,17 @@ class Trainer:
         return rewards
     
     def rollout(self, obs, info):
+        rewards_sum = 0
         for _ in range(self.steps):
             obs = process_obs(obs)
             action, log_prob, value = self.get_action(obs)
             next_obs, task_reward, terminate, timeout, info = self.env.step(action)
             motion_obs = info["amp_obs"]
             disc_reward = self.get_discriminator_reward(motion_obs)
-            reward = task_reward * 0 + disc_reward * 1.0
+            reward = task_reward * 0 + disc_reward * 5.0
+
+            rewards_sum += reward.mean()
+
             done = terminate | timeout
             
             records = {
@@ -139,6 +149,8 @@ class Trainer:
 
             obs = next_obs
 
+        print(rewards_sum/self.steps)
+
         last_obs = process_obs(obs)
         _, _, last_value = self.get_action(last_obs)
         returns, advantages = compute_gae(
@@ -157,7 +169,7 @@ class Trainer:
     
     def update(self):
         for _ in range(5):
-            for batch in self.rollout_buffer.sample_batchs(self.batch_keys, 4096):
+            for batch in self.rollout_buffer.sample_batchs(self.batch_keys, 4096*5):
                 obs_batch = batch["observations"].to(self.device)
                 action_batch = batch["actions"].to(self.device)
                 log_prob_batch = batch["log_probs"].to(self.device)
@@ -173,67 +185,54 @@ class Trainer:
                     "motion_observations",
                     1024
                 ).to(self.device)
+
                 history_motion_batch = self.hisotry_motion_buffer.sample_tensor(
                     "motion_observations",
                     512
                 ).to(self.device)
 
-                policy_loss, entropy, kl_divergence = PPO.compute_policy_loss(
-                    self.actor,
-                    log_prob_batch,
-                    obs_batch,
-                    action_batch,
-                    advantage_batch,
-                    0.2,
-                    1e-3
-                )
- 
-                value_loss = PPO.compute_clipped_value_loss(
-                    self.critic,
-                    obs_batch,
-                    value_batch,
-                    return_batch,
-                    0.2
-                )
-                
-                loss = policy_loss + value_loss * 1.0 - entropy * 0.01
+                policy_loss, entropy, kl_divergence = PPO.compute_policy_loss(self.actor,
+                                                                              log_prob_batch,
+                                                                              obs_batch,
+                                                                              action_batch,
+                                                                              advantage_batch,
+                                                                              0.2,
+                                                                              1e-4)
 
-                self.ac_optimizer.zero_grad(set_to_none=True)
+                value_loss = PPO.compute_value_loss(self.critic,
+                                                    obs_batch,
+                                                    return_batch)
+                
+                loss = policy_loss + value_loss * 0.5 - entropy * 1e-3
+
+                self.ac_optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+                #torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+                #torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
                 self.ac_optimizer.step()
 
-                policy_motion_obs = torch.cat([current_motion_batch, history_motion_batch], dim=0)
-                d_loss = GAN.compute_bce_loss(
-                    self.discriminator,
-                    reference_motion_batch,
-                    policy_motion_obs,
-                    r1_gamma=5.0
-                ) * 5.0
+                agent_motion_batch = torch.cat([current_motion_batch, history_motion_batch])
+                
+                d_loss = GAN.compute_bce_loss(self.discriminator,
+                                              reference_motion_batch,
+                                              agent_motion_batch,
+                                              r1_gamma=5.0)
+                
                 self.d_optimizer.zero_grad(set_to_none=True)
                 d_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), 0.5)
                 self.d_optimizer.step()
-
-                #print(d_loss.item())
 
     def train(self):
         obs, info = self.env.reset()
         for epoch in trange(1000):
             obs, info = self.rollout(obs, info)
             self.update()
-
-            if (epoch+1) % 100 == 0:
-                torch.save(
-                    [
-                        self.discriminator.state_dict(),
-                        self.actor.state_dict(),
-                        self.critic.state_dict()
-                    ],
-                    f"model_{epoch+1}.pth"
-                )
         self.env.close()
+
+        torch.save(
+            [self.discriminator.state_dict(), self.actor.state_dict(), self.critic.state_dict()],
+            "weight.pth"
+        )
 
 if __name__ == "__main__":
     trainer = Trainer()
