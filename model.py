@@ -4,18 +4,19 @@ import torch.nn.functional as F
 
 from RLAlg.nn.layers import MLPLayer, GaussianHead, CriticHead
 from RLAlg.nn.steps import StochasticContinuousPolicyStep, ValueStep
+from RLAlg.utils import weight_init
 
 class Actor(nn.Module):
     def __init__(self, obs_dim:int, action_dim:int):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            MLPLayer(obs_dim, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
+            MLPLayer(obs_dim, 1024, nn.SiLU(), True),
+            MLPLayer(1024, 1024, nn.SiLU(), True),
+            MLPLayer(1024, 512, nn.SiLU(), True),
         )
 
-        self.head = GaussianHead(256, action_dim)
+        self.head = GaussianHead(512, action_dim)
 
     def forward(self, obs:torch.Tensor, action:torch.Tensor|None=None) -> StochasticContinuousPolicyStep:
         x = self.encoder(obs)
@@ -28,12 +29,12 @@ class Critic(nn.Module):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            MLPLayer(obs_dim, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
+            MLPLayer(obs_dim, 1024, nn.SiLU(), True),
+            MLPLayer(1024, 1024, nn.SiLU(), True),
+            MLPLayer(1024, 512, nn.SiLU(), True),
         )
 
-        self.head = CriticHead(256)
+        self.head = CriticHead(512)
 
     def forward(self, obs:torch.Tensor) -> ValueStep:
         x = self.encoder(obs)
@@ -46,12 +47,13 @@ class Discriminator(nn.Module):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            MLPLayer(obs_dim, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
-            MLPLayer(256, 256, nn.SiLU(), True),
+            MLPLayer(obs_dim, 1024, nn.ReLU(), True),
+            MLPLayer(1024, 1024, nn.ReLU(), True),
+            MLPLayer(1024, 512, nn.ReLU(), True),
         )
 
-        self.head = CriticHead(256)
+        self.head = CriticHead(512)
+        weight_init(self.head.critic_layer)
 
     def forward(self, obs:torch.Tensor) -> ValueStep:
         x = self.encoder(obs)
