@@ -31,7 +31,8 @@ class Evaluator:
     def __init__(self):
         self.cfg = HumanoidAmpWalkEnvCfg()
         self.cfg.scene.num_envs = 1
-        self.env = gymnasium.make("Isaac-Humanoid-AMP-Walk-Direct-v0", cfg=self.cfg)
+        self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
+        self.env = gymnasium.make(self.env_name, cfg=self.cfg)
 
         obs_dim = self.cfg.observation_space
         motion_dim = self.cfg.amp_observation_space * self.cfg.num_amp_observations
@@ -40,13 +41,13 @@ class Evaluator:
         self.device = self.env.unwrapped.device
 
         self.actor = Actor(obs_dim, action_dim).to(self.device)
-        self.discriminator = Discriminator(motion_dim).to(self.device)
+        #self.discriminator = Discriminator(motion_dim).to(self.device)
 
-        discriminator_weight, actor_weights, _ = torch.load("weight.pth")
+        actor_weights, _ = torch.load("weight.pth")
         self.actor.load_state_dict(actor_weights)
-        self.discriminator.load_state_dict(discriminator_weight)
+        #self.discriminator.load_state_dict(discriminator_weight)
         self.actor.eval()
-        self.discriminator.eval()
+        #self.discriminator.eval()
 
     @torch.no_grad()
     def get_action(self, obs_batch:torch.Tensor, determine:bool=False):
@@ -71,15 +72,6 @@ class Evaluator:
             obs = process_obs(obs)
             action = self.get_action(obs, True)
             next_obs, task_reward, terminate, timeout, info = self.env.step(action)
-            motion_obs = info["amp_obs"]
-            print("Fake")
-            disc_reward = self.get_discriminator_reward(motion_obs)
-            print(disc_reward)
-            print("True")
-            true_motion_obs = self.env.unwrapped.collect_reference_motions(16)
-            disc_reward = self.get_discriminator_reward(true_motion_obs)
-            print(disc_reward)
-            print("---------------")
             obs = next_obs
 
         return obs, info

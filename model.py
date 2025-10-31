@@ -12,7 +12,6 @@ class Actor(nn.Module):
 
         self.encoder = nn.Sequential(
             MLPLayer(obs_dim, 1024, nn.SiLU(), True),
-            MLPLayer(1024, 1024, nn.SiLU(), True),
             MLPLayer(1024, 512, nn.SiLU(), True),
         )
 
@@ -30,7 +29,6 @@ class Critic(nn.Module):
 
         self.encoder = nn.Sequential(
             MLPLayer(obs_dim, 1024, nn.SiLU(), True),
-            MLPLayer(1024, 1024, nn.SiLU(), True),
             MLPLayer(1024, 512, nn.SiLU(), True),
         )
 
@@ -48,7 +46,6 @@ class Discriminator(nn.Module):
 
         self.encoder = nn.Sequential(
             MLPLayer(obs_dim, 1024, nn.ReLU(), True),
-            MLPLayer(1024, 1024, nn.ReLU(), True),
             MLPLayer(1024, 512, nn.ReLU(), True),
         )
 
