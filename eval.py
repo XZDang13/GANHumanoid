@@ -18,6 +18,7 @@ import gymnasium
 import torch
 import numpy as np
 from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpWalkEnvCfg
+from isaaclab_tasks.direct.humanoid.humanoid_env import HumanoidEnvCfg
 
 from RLAlg.nn.steps import StochasticContinuousPolicyStep, ValueStep
 
@@ -30,12 +31,15 @@ def process_obs(obs):
 class Evaluator:
     def __init__(self):
         self.cfg = HumanoidAmpWalkEnvCfg()
-        self.cfg.scene.num_envs = 1
+        #self.cfg.scene.num_envs = 1
         self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
+        #self.cfg = HumanoidEnvCfg()
+        self.cfg.scene.num_envs = 10
+        #self.env_name = "Isaac-Humanoid-Direct-v0"
         self.env = gymnasium.make(self.env_name, cfg=self.cfg)
 
         obs_dim = self.cfg.observation_space
-        motion_dim = self.cfg.amp_observation_space * self.cfg.num_amp_observations
+        #motion_dim = self.cfg.amp_observation_space * self.cfg.num_amp_observations
         action_dim = self.cfg.action_space
 
         self.device = self.env.unwrapped.device
