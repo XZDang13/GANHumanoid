@@ -75,6 +75,7 @@ class Evaluator:
         for i in range(1000):
             obs = process_obs(obs)
             action = self.get_action(obs, True)
+            print(action)
             next_obs, task_reward, terminate, timeout, info = self.env.step(action)
             obs = next_obs
 

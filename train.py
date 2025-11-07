@@ -50,7 +50,7 @@ class Trainer:
         self.discriminator = Discriminator(motion_dim).to(self.device)
 
         params = list(self.actor.parameters()) + list(self.critic.parameters())
-        self.ac_optimizer = torch.optim.Adam(params, lr=5e-5)
+        self.ac_optimizer = torch.optim.Adam(params, lr=1e-3)
         
         self.d_optimizer = torch.optim.Adam(
             [
@@ -84,24 +84,23 @@ class Trainer:
         self.rollout_buffer.create_storage_space("values", (), torch.float32)
         self.rollout_buffer.create_storage_space("dones", (), torch.float32)
 
-        self.reference_motion_buffer = ReplayBuffer(
-            4000,
-            50
+        self.expert_motion_buffer = ReplayBuffer(
+            500,
+            400
         )
         
-        
-        self.reference_motion_buffer.create_storage_space("motion_observations", (motion_dim,))
+        self.expert_motion_buffer.create_storage_space("motion_observations", (motion_dim,))
 
-        for _ in range(50):
-            motion_obs = self.env.unwrapped.collect_reference_motions(4000)
-            self.reference_motion_buffer.add_records({"motion_observations": motion_obs})
+        for _ in range(400):
+            motion_obs = self.env.unwrapped.collect_reference_motions(500)
+            self.expert_motion_buffer.add_records({"motion_observations": motion_obs})
 
-        self.hisotry_motion_buffer = ReplayBuffer(
+        self.agent_motion_buffer = ReplayBuffer(
             self.cfg.scene.num_envs,
             100
         )
 
-        self.hisotry_motion_buffer.create_storage_space("motion_observations", (motion_dim,))
+        self.agent_motion_buffer.create_storage_space("motion_observations", (motion_dim,))
         
     @torch.no_grad()
     def get_action(self, obs_batch:torch.Tensor, determine:bool=False):
@@ -123,7 +122,7 @@ class Trainer:
                                             torch.tensor(0.0001, device=self.device)))
         return rewards, disc_step.value
     
-    def rollout(self, obs, info):
+    def rollout(self, obs):
         rewards_sum = 0
         logit_sum = 0
         for _ in range(self.steps):
@@ -132,7 +131,7 @@ class Trainer:
             next_obs, task_reward, terminate, timeout, info = self.env.step(action)
             motion_obs = info["amp_obs"]
             disc_reward, logit = self.get_discriminator_reward(motion_obs)
-            reward = task_reward * 0 + disc_reward * 2.0
+            reward = task_reward * 0. + disc_reward * 2.0
             #reward = task_reward
 
             rewards_sum += reward.mean()
@@ -155,7 +154,7 @@ class Trainer:
             }
 
             self.rollout_buffer.add_records(records)
-            self.hisotry_motion_buffer.add_records(motion_record)
+            self.agent_motion_buffer.add_records(motion_record)
 
             obs = next_obs
 
@@ -177,10 +176,10 @@ class Trainer:
         self.rollout_buffer.add_storage("returns", returns)
         self.rollout_buffer.add_storage("advantages", advantages)
 
-        motion_obs = self.env.unwrapped.collect_reference_motions(4000)
-        self.reference_motion_buffer.add_records({"motion_observations": motion_obs})
+        motion_obs = self.env.unwrapped.collect_reference_motions(500)
+        self.expert_motion_buffer.add_records({"motion_observations": motion_obs})
 
-        return obs, info
+        return obs
     
     def update(self):
         for _ in range(5):
@@ -192,23 +191,29 @@ class Trainer:
                 return_batch = batch["returns"].to(self.device)
                 advantage_batch = batch["advantages"].to(self.device)
 
-                policy_loss, entropy, kl_divergence = PPO.compute_policy_loss(self.actor,
+                policy_loss_dict = PPO.compute_policy_loss(self.actor,
                                                                               log_prob_batch,
                                                                               obs_batch,
                                                                               action_batch,
                                                                               advantage_batch,
                                                                               0.2,
-                                                                              1e-4)
+                                                                              0.0)
+                
+                policy_loss = policy_loss_dict["loss"]
+                entropy = policy_loss_dict["entropy"]
+                kl_divergence = policy_loss_dict["kl_divergence"]
 
-                value_loss = PPO.compute_clipped_value_loss(self.critic,
+                value_loss_dict = PPO.compute_clipped_value_loss(self.critic,
                                                     obs_batch,
                                                     value_batch,
                                                     return_batch,
                                                     0.2)
                 
-                loss = policy_loss + value_loss * 2.5 - entropy * 1e-5
+                value_loss = value_loss_dict["loss"]
+                
+                loss = policy_loss + value_loss * 2.5 - entropy * 0.0
 
-                self.ac_optimizer.zero_grad()
+                self.ac_optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 #torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
                 #torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
@@ -220,32 +225,37 @@ class Trainer:
                         4096
                     ).to(self.device)
 
-                reference_motion_batch = self.reference_motion_buffer.sample_tensor(
+                expert_motion_batch = self.expert_motion_buffer.sample_tensor(
                     "motion_observations",
                     4096
                 ).to(self.device)
 
-                history_motion_batch = self.hisotry_motion_buffer.sample_tensor(
+                past_motion_batch = self.agent_motion_buffer.sample_tensor(
                     "motion_observations",
                     4096
                 ).to(self.device)
 
-                agent_motion_batch = torch.cat([current_motion_batch, history_motion_batch])
+                agent_motion_batch = torch.cat([current_motion_batch, past_motion_batch])
                 
-                d_loss = GAN.compute_bce_loss(self.discriminator,
-                                                reference_motion_batch,
+                d_loss_dict = GAN.compute_bce_loss(self.discriminator,
+                                                expert_motion_batch,
                                                 agent_motion_batch,
+                                                detach_fake=False,
                                                 r1_gamma=5.0)
+                
+                d_loss = d_loss_dict["loss"] * 5.0
+                d_loss_real = d_loss_dict["loss_real"]
+                d_loss_fake = d_loss_dict["loss_fake"]
+                d_loss_gp = d_loss_dict["gradient_penalty"]
                 
                 self.d_optimizer.zero_grad(set_to_none=True)
                 d_loss.backward()
                 self.d_optimizer.step()
-                
 
     def train(self):
-        obs, info = self.env.reset()
-        for epoch in trange(1000):
-            obs, info = self.rollout(obs, info)
+        obs, _ = self.env.reset()
+        for epoch in trange(500):
+            obs = self.rollout(obs)
             self.update()
         self.env.close()
 
