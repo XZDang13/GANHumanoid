@@ -31,11 +31,12 @@ def process_obs(obs):
 class Evaluator:
     def __init__(self):
         self.cfg = HumanoidAmpWalkEnvCfg()
-        #self.cfg.scene.num_envs = 1
-        self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
         #self.cfg = HumanoidEnvCfg()
-        self.cfg.scene.num_envs = 10
+
+        self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
         #self.env_name = "Isaac-Humanoid-Direct-v0"
+        
+        self.cfg.scene.num_envs = 10
         self.env = gymnasium.make(self.env_name, cfg=self.cfg)
 
         obs_dim = self.cfg.observation_space

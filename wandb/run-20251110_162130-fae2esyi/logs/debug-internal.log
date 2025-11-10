@@ -1,0 +1,10 @@
+{"time":"2025-11-10T16:21:30.629691249+01:00","level":"INFO","msg":"stream: starting","core version":"0.22.3"}
+{"time":"2025-11-10T16:21:30.885626499+01:00","level":"INFO","msg":"stream: created new stream","id":"fae2esyi"}
+{"time":"2025-11-10T16:21:30.885678159+01:00","level":"INFO","msg":"handler: started","stream_id":"fae2esyi"}
+{"time":"2025-11-10T16:21:30.88576511+01:00","level":"INFO","msg":"stream: started","id":"fae2esyi"}
+{"time":"2025-11-10T16:21:30.88578763+01:00","level":"INFO","msg":"writer: started","stream_id":"fae2esyi"}
+{"time":"2025-11-10T16:21:30.88578829+01:00","level":"INFO","msg":"sender: started","stream_id":"fae2esyi"}
+{"time":"2025-11-10T16:22:16.530911707+01:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":5412}
+{"time":"2025-11-10T16:22:16.578807782+01:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":10}
+{"time":"2025-11-10T16:22:46.565820424+01:00","level":"INFO","msg":"flowcontrol: backed up, offloading to disk","recordNumber":8958}
+{"time":"2025-11-10T16:22:46.570093059+01:00","level":"INFO","msg":"flowcontrol: unblocked","totalOffloaded":3}
