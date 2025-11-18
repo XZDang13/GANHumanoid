@@ -17,7 +17,7 @@ from tqdm import trange
 import gymnasium
 import torch
 import numpy as np
-from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpWalkEnvCfg
+from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpDanceEnvCfg
 from isaaclab_tasks.direct.humanoid.humanoid_env import HumanoidEnvCfg
 
 from RLAlg.nn.steps import StochasticContinuousPolicyStep, ValueStep
@@ -30,13 +30,13 @@ def process_obs(obs):
 
 class Evaluator:
     def __init__(self):
-        self.cfg = HumanoidAmpWalkEnvCfg()
+        self.cfg = HumanoidAmpDanceEnvCfg()
         #self.cfg = HumanoidEnvCfg()
 
-        self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
+        self.env_name = "Isaac-Humanoid-AMP-Dance-Direct-v0"
         #self.env_name = "Isaac-Humanoid-Direct-v0"
         
-        self.cfg.scene.num_envs = 10
+        self.cfg.scene.num_envs = 1
         self.env = gymnasium.make(self.env_name, cfg=self.cfg)
 
         obs_dim = self.cfg.observation_space
@@ -72,12 +72,19 @@ class Evaluator:
         return rewards
     
     def rollout(self, obs, info):
+        length = 0
 
         for i in range(1000):
             obs = process_obs(obs)
             action = self.get_action(obs, True)
-            print(action)
             next_obs, task_reward, terminate, timeout, info = self.env.step(action)
+
+            length += 1
+
+            if terminate:
+                print(length)
+                length = 0
+
             obs = next_obs
 
         return obs, info

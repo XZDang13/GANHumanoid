@@ -17,10 +17,11 @@ from tqdm import trange
 import gymnasium
 import torch
 import numpy as np
-from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpWalkEnvCfg
+from isaaclab_tasks.direct.humanoid_amp.humanoid_amp_env_cfg import HumanoidAmpDanceEnvCfg
 from isaaclab_tasks.direct.humanoid.humanoid_env import HumanoidEnvCfg
 
-from RLAlg.buffer.replay_buffer import ReplayBuffer, compute_advantage
+from RLAlg.normalizer import Normalizer
+from RLAlg.buffer.replay_buffer import ReplayBuffer, compute_gae
 from RLAlg.nn.steps import StochasticContinuousPolicyStep, ValueStep
 from RLAlg.alg.ppo import PPO
 from RLAlg.alg.gan import GAN
@@ -34,8 +35,8 @@ def process_obs(obs):
 
 class Trainer:
     def __init__(self):
-        self.cfg = HumanoidAmpWalkEnvCfg()
-        self.env_name = "Isaac-Humanoid-AMP-Walk-Direct-v0"
+        self.cfg = HumanoidAmpDanceEnvCfg()
+        self.env_name = "Isaac-Humanoid-AMP-Dance-Direct-v0"
         #self.cfg = HumanoidEnvCfg()
         #self.env_name = "Isaac-Humanoid-Direct-v0"
         self.env = gymnasium.make(self.env_name, cfg=self.cfg)
@@ -49,21 +50,30 @@ class Trainer:
         self.actor = Actor(obs_dim, action_dim).to(self.device)
         self.critic = Critic(obs_dim).to(self.device)
         self.discriminator = Discriminator(motion_dim).to(self.device)
+        self.motion_normalizer = Normalizer((motion_dim,)).to(self.device)
 
-        self.optimizer = torch.optim.Adam(
+        self.ac_optimizer = torch.optim.Adam(
             [
                 {'params': self.actor.parameters(),
                  "name": "actor"},
                  {'params': self.critic.parameters(),
                  "name": "critic"},
+            ],
+            lr=5e-5
+        )
+
+        self.d_optimizer = torch.optim.Adam(
+            [
                 {'params': self.discriminator.encoder.parameters(),
-                 "weight_decay":1e-3,
+                 "weight_decay":1e-4,
                  "name": "discriminator"},
                 {'params': self.discriminator.head.parameters(),
-                 "weight_decay":1e-1,
+                 "weight_decay":5e-2,
                  "name": "discriminator_head"},
             ],
-            lr=5e-5)
+            lr=5e-5,
+            betas=(0.5, 0.999)
+        )
         
         self.steps = 20
 
@@ -125,6 +135,7 @@ class Trainer:
     
     @torch.no_grad()
     def get_discriminator_reward(self, motion_obs_batch: torch.Tensor) -> torch.Tensor:
+        motion_obs_batch = self.motion_normalizer(motion_obs_batch)
         disc_step:ValueStep = self.discriminator(motion_obs_batch)
         rewards = -torch.log(torch.maximum(1 - 1 / (1 + torch.exp(-disc_step.value)),
                                             torch.tensor(0.0001, device=self.device)))
@@ -143,7 +154,6 @@ class Trainer:
             disc_reward, logit = self.get_discriminator_reward(motion_obs)
             reward = task_reward * 0.0 + disc_reward * 2.0
             #reward = task_reward
-
             done = terminate | timeout
             
             records = {
@@ -171,21 +181,15 @@ class Trainer:
                 
             WandbLogger.log_metrics(step_info, self.global_step)
 
-        #last_obs = process_obs(obs)
-        #_, _, last_value = self.get_action(last_obs)
-        #returns, advantages = compute_gae(
-        #    self.rollout_buffer.data["rewards"],
-        #    self.rollout_buffer.data["values"],
-        #    self.rollout_buffer.data["dones"],
-        #    last_value,
-        #    0.99,
-        #    0.95
-        #)
-
-        returns, advantages = compute_advantage(
+        last_obs = process_obs(obs)
+        _, _, last_value = self.get_action(last_obs)
+        returns, advantages = compute_gae(
             self.rollout_buffer.data["rewards"],
             self.rollout_buffer.data["values"],
             self.rollout_buffer.data["dones"],
+            last_value,
+            0.99,
+            0.95
         )
         
         #print(returns)
@@ -240,10 +244,18 @@ class Trainer:
                                                     0.2)
                 
                 value_loss = value_loss_dict["loss"]
+
+                ac_loss = policy_loss - entropy * 0.001 + value_loss * 0.5
+
+                self.ac_optimizer.zero_grad(set_to_none=True)
+                ac_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 5.0)
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 5.0)
+                self.ac_optimizer.step()
                 
                 current_motion_batch = self.rollout_buffer.sample_tensor(
                     "motion_observations",
-                    4096
+                    2048
                 ).to(self.device)
 
                 expert_motion_batch = self.expert_motion_buffer.sample_tensor(
@@ -253,17 +265,19 @@ class Trainer:
 
                 past_motion_batch = self.agent_motion_buffer.sample_tensor(
                     "motion_observations",
-                    4096
+                    2048
                 ).to(self.device)
 
                 agent_motion_batch = torch.cat([current_motion_batch, past_motion_batch])
-
-                agent_motion_batch.requires_grad_(True)
                 
-                d_loss_dict = GAN.compute_bce_loss(self.discriminator,
+                expert_motion_batch = self.motion_normalizer(expert_motion_batch, True)
+                agent_motion_batch = self.motion_normalizer(agent_motion_batch, True)
+
+                d_loss_dict = GAN.compute_soft_bce_loss(self.discriminator,
                                                 expert_motion_batch,
                                                 agent_motion_batch,
-                                                detach_fake=True,
+                                                detach_fake=False,
+                                                label_smoothing=0.,
                                                 r1_gamma=5.0)
                 
                 d_loss = d_loss_dict["loss"]
@@ -271,13 +285,12 @@ class Trainer:
                 d_loss_fake = d_loss_dict["loss_fake"]
                 d_loss_gp = d_loss_dict["gradient_penalty"]
 
-                loss = policy_loss - entropy * 0.001 + value_loss * 0.5 + d_loss * 5.0
+                weighted_d_loss = d_loss
 
-                self.optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
-                self.optimizer.step()
+                self.d_optimizer.zero_grad(set_to_none=True)
+                weighted_d_loss.backward()
+                self.d_optimizer.step()
+
                 
 
                 policy_loss_buffer.append(policy_loss.item())
@@ -313,7 +326,7 @@ class Trainer:
 
     def train(self):
         obs, _ = self.env.reset()
-        for epoch in trange(500):
+        for epoch in trange(4000):
             obs = self.rollout(obs)
             self.update()
         self.env.close()
